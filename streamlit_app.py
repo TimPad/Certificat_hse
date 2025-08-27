@@ -183,6 +183,33 @@ def main():
         - Генерирует текст для сертификатов
         """)
         
+        # Кнопка скачивания примера файла
+        st.header("📥 Скачать пример")
+        
+        # Загружаем пример файла для скачивания
+        try:
+            # Используем путь относительно текущего файла
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            example_file_path = os.path.join(current_dir, 'Сертификаты пример.xlsx')
+            
+            # Проверяем существование файла
+            if os.path.exists(example_file_path):
+                with open(example_file_path, 'rb') as example_file:
+                    example_data = example_file.read()
+                
+                st.download_button(
+                    label="📊 Скачать пример Excel файла",
+                    data=example_data,
+                    file_name="Сертификаты пример.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Скачайте этот файл как шаблон для ваших данных"
+                )
+                st.success("💡 Используйте этот файл как образец!")
+            else:
+                st.warning("⚠️ Пример файла не найден в репозитории")
+        except Exception as e:
+            st.error(f"❌ Ошибка при загрузке примера файла: {str(e)}")
+        
         st.header("📋 Требования к файлам")
         st.markdown("""
         **Excel файл должен содержать:**
@@ -258,7 +285,7 @@ def main():
                 tab1, tab2, tab3 = st.tabs(["📄 Результаты", "📋 Лог обработки", "💾 Скачать"])
                 
                 with tab1:
-                    st.dataframe(result_df, use_container_width=True)
+                    st.dataframe(result_df, width="stretch")
                 
                 with tab2:
                     st.text_area(
