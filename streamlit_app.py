@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from docx import Document
 from openpyxl import load_workbook
 import io
 import tempfile
@@ -17,36 +16,36 @@ st.set_page_config(
 
 # Кэширование для загрузки справочных данных
 @st.cache_data
-def load_reference_data(docx_content: bytes) -> Dict[str, Dict[str, str]]:
-    """Загружает справочные данные из Word документа"""
+def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
+    """Загружает справочные данные из Excel файла с агрегированными навыками"""
     # Создаем временный файл
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
-        tmp_file.write(docx_content)
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+        tmp_file.write(skills_content)
         tmp_file_path = tmp_file.name
     
     try:
-        doc = Document(tmp_file_path)
-        table = doc.tables[0]
+        skills_df = pd.read_excel(tmp_file_path)
         
+        # Создаем словарь маппинга: {дисциплина: {уровень_оценки: описание_навыков}}
         grade_mapping = {}
-        for row in table.rows[1:]:  # Пропускаем заголовок
-            cells = row.cells
-            discipline = cells[0].text.strip()
+        
+        for _, row in skills_df.iterrows():
+            discipline = row['Дисциплина']
+            level = row['Уровень_оценки']
+            description = row['Описание_навыков']
             
-            # Удаляем префикс "Независимый экзамен по ", если есть
-            if discipline.startswith("Независимый экзамен по "):
-                discipline = discipline.replace("Независимый экзамен по ", "")
-            discipline = discipline.strip()
-
-            satisfactory = cells[1].text.strip()
-            good = cells[2].text.strip()
-            excellent = cells[3].text.strip()
-
-            grade_mapping[discipline] = {
-                '3': satisfactory,
-                '4': good,
-                '5': excellent
+            if discipline not in grade_mapping:
+                grade_mapping[discipline] = {}
+            
+            # Маппим уровни оценки на ключи для совместимости
+            level_key_mapping = {
+                'Удовлетворительно': '3',
+                'Хорошо': '4',
+                'Отлично': '5'
             }
+            
+            if level in level_key_mapping:
+                grade_mapping[discipline][level_key_mapping[level]] = description
         
         return grade_mapping
     finally:
@@ -55,14 +54,6 @@ def load_reference_data(docx_content: bytes) -> Dict[str, Dict[str, str]]:
 
 def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, str]]) -> Tuple[pd.DataFrame, list]:
     """Обрабатывает данные студентов и возвращает результаты"""
-    
-    # Словарь сопоставления названий дисциплин
-    discipline_name_mapping = {
-        'Цифровая грамотность': 'цифровой грамотности',
-        'Алгоритмическое мышление и программирование': 'программированию. Базовый уровень',
-        'Анализу данных, искусственный интеллект и генеративные модели': 
-            'анализу данных, искусственному интеллекту и генеративным моделям. Базовый уровень'
-    }
     
     # Словарь сопоставления оценок
     grade_column_mapping = {
@@ -74,94 +65,91 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     results = []
     processing_log = []
     
-    # Определяем какие колонки использовать
-    has_clean_columns = 'Название Дисциплины 1' in df.columns
+    processing_log.append(f"📊 Начинаем обработку {len(df)} студентов...")
+    processing_log.append(f"🗂️ Найдено дисциплин в справочнике: {len(grade_mapping)}")
+    processing_log.append(f"📋 Дисциплины в справочнике: {list(grade_mapping.keys())}")
+    processing_log.append(f"📁 Колонки в Excel файле: {list(df.columns)}")
     
     for index, row in df.iterrows():
         student_results = []
         student_name = row.iloc[0] if len(row) > 0 else f"Студент {index + 1}"
         
-        processing_log.append(f"👤 Обрабатываем студента: {student_name}")
+        processing_log.append(f"\n👤 Обрабатываем студента: {student_name}")
         
         # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
             try:
-                if has_clean_columns:
-                    clean_disc_name_col = f"Название Дисциплины {discipline_num}"
-                    if clean_disc_name_col in df.columns:
-                        clean_discipline = str(row[clean_disc_name_col]).strip()
-                    else:
-                        continue
-                else:
-                    # Используем старую колонку
-                    old_disc_name_col = f"Дисциплина {discipline_num}"
-                    if old_disc_name_col not in df.columns:
-                        continue
-                    discipline_name = row[old_disc_name_col]
-                    clean_discipline = str(discipline_name).strip()
-                    if clean_discipline.startswith("Независимый экзамен по "):
-                        clean_discipline = clean_discipline.replace("Независимый экзамен по ", "").strip()
-                
+                # Используем колонки с полными названиями дисциплин для точного соответствия
+                discipline_col = f"Дисциплина {discipline_num}"
                 grade_5_col = f"Оценка 5 баллов Дисциплина {discipline_num}"
-                if grade_5_col not in df.columns:
+                
+                # Получаем название дисциплины и оценку
+                if discipline_col in df.columns and grade_5_col in df.columns:
+                    full_discipline = str(row[discipline_col]).strip()
+                    grade_value = row[grade_5_col]
+                else:
+                    processing_log.append(f"    ⚠️ Необходимые колонки не найдены: '{discipline_col}' или '{grade_5_col}'")
                     continue
                 
-                grade_value = row[grade_5_col]
-                
-                processing_log.append(f"  📚 Дисциплина {discipline_num}: '{clean_discipline}', Оценка: {grade_value}")
+                processing_log.append(f"  📚 Дисциплина {discipline_num}: '{full_discipline}', Оценка: {grade_value}")
                 
                 # Пропускаем, если дисциплина или оценка отсутствуют
-                if pd.isna(clean_discipline) or pd.isna(grade_value):
+                if pd.isna(full_discipline) or pd.isna(grade_value):
                     processing_log.append(f"    ⏭️ Пропускаем: отсутствует название дисциплины или оценка")
                     continue
                 
                 # Очищаем текст оценки
-                grade_text = str(grade_value).strip()
+                clean_grade = str(grade_value).strip()
                 
-                # Получаем ключ колонки для справочника
-                if grade_text in grade_column_mapping:
-                    grade_key = grade_column_mapping[grade_text]
-                else:
-                    processing_log.append(f"    ❌ Неизвестная оценка: {grade_text}")
+                processing_log.append(f"    🔍 Ищем соответствие для: '{full_discipline}' с оценкой '{clean_grade}'")
+                
+                # Прямое соответствие текста оценки колонкам
+                if clean_grade not in grade_column_mapping:
+                    processing_log.append(f"    ❌ Неизвестная оценка: '{clean_grade}' (ожидалось: Удовлетворительно/Хорошо/Отлично)")
                     continue
-                
-                # Ищем соответствующую дисциплину в справочнике
-                mapped_discipline = None
-                
-                # Прямое сопоставление
-                if clean_discipline in discipline_name_mapping:
-                    mapped_discipline = discipline_name_mapping[clean_discipline]
-                
-                # Поиск в справочнике
-                if not mapped_discipline:
-                    for ref_discipline in grade_mapping.keys():
-                        if clean_discipline.lower() in ref_discipline.lower() or ref_discipline.lower() in clean_discipline.lower():
-                            mapped_discipline = ref_discipline
-                            break
-                
-                if not mapped_discipline:
-                    processing_log.append(f"    ❌ Дисциплина '{clean_discipline}' не найдена в справочнике")
-                    continue
-                
-                # Получаем результирующий текст
-                if mapped_discipline in grade_mapping and grade_key in grade_mapping[mapped_discipline]:
-                    result_text = grade_mapping[mapped_discipline][grade_key]
                     
-                    # Форматируем название дисциплины
-                    formatted_discipline = clean_discipline.capitalize()
-                    formatted_result = f"{formatted_discipline}:\n{result_text}"
-                    
-                    student_results.append(formatted_result)
-                    processing_log.append(f"    ✅ Успешно обработано")
+                grade_key = grade_column_mapping[clean_grade]
+                processing_log.append(f"    🔄 Оценка '{clean_grade}' соответствует колонке {grade_key}")
+                
+                # Точное соответствие названия дисциплины в справочнике
+                target_discipline = None
+                if full_discipline in grade_mapping:
+                    target_discipline = full_discipline
+                    processing_log.append(f"    ✅ Найдено точное соответствие: '{full_discipline}'")
                 else:
-                    processing_log.append(f"    ❌ Не найден текст для оценки {grade_key}")
+                    processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
+                    processing_log.append(f"    📋 Первые 3 доступные дисциплины: {list(grade_mapping.keys())[:3]}...")
+                
+                if target_discipline and target_discipline in grade_mapping:
+                    if grade_key in grade_mapping[target_discipline]:
+                        result_text = grade_mapping[target_discipline][grade_key]
+                        # Получаем короткое название для отображения
+                        short_name_col = f"Название Дисциплины {discipline_num}"
+                        if short_name_col in df.columns:
+                            short_name = str(row[short_name_col]).strip()
+                            formatted_discipline = short_name.capitalize()
+                        else:
+                            formatted_discipline = full_discipline
+                        
+                        formatted_result = f"{formatted_discipline}:\n{result_text}"
+                        student_results.append(formatted_result)
+                        processing_log.append(f"    ✅ Найдено точное соответствие: '{formatted_discipline}' → текст результата")
+                    else:
+                        processing_log.append(f"    ⚠️ Дисциплина найдена, но нет текста для оценки {clean_grade}")
+                else:
+                    processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
+                    processing_log.append(f"    📋 Первые 3 доступные дисциплины: {list(grade_mapping.keys())[:3]}...")
                     
             except Exception as e:
                 processing_log.append(f"    ❌ Ошибка при обработке дисциплины {discipline_num}: {str(e)}")
         
-        # Объединяем результаты студента
-        final_result = "\n\n".join(student_results) if student_results else "Нет данных для обработки"
+        # Формируем итоговый результат для студента (разделяем двойным переносом строки между дисциплинами)
+        final_result = "\n\n".join(student_results) if student_results else ""
         results.append(final_result)
+        
+        processing_log.append(f"  🎯 Итоговый результат для {student_name}: '{final_result}'")
+    
+    processing_log.append(f"\n📊 Обработано {len(df)} студентов")
     
     # Добавляем результаты в DataFrame
     df_result = df.copy()
@@ -208,22 +196,22 @@ def main():
             else:
                 st.warning("⚠️ Пример Excel файла не найден в репозитории")
             
-            # Word справочник критериев
-            word_example_path = os.path.join(current_dir, 'Сертификат НЭ по ЦК.docx')
+            # Excel справочник агрегированных навыков
+            skills_example_path = os.path.join(current_dir, 'агрегированные_навыки.xlsx')
             
-            if os.path.exists(word_example_path):
-                with open(word_example_path, 'rb') as criteria_file:
-                    word_criteria_data = criteria_file.read()
+            if os.path.exists(skills_example_path):
+                with open(skills_example_path, 'rb') as skills_file:
+                    skills_data = skills_file.read()
                 
                 st.download_button(
-                    label="📄 Скачать справочник критериев",
-                    data=word_criteria_data,
-                    file_name="Сертификат НЭ по ЦК.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    help="Скачайте этот файл как пример справочника с критериями оценок"
+                    label="📄 Скачать справочник навыков",
+                    data=skills_data,
+                    file_name="агрегированные_навыки.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Скачайте этот файл как пример справочника с агрегированными навыками"
                 )
             else:
-                st.warning("⚠️ Справочник критериев не найден в репозитории")
+                st.warning("⚠️ Справочник навыков не найден в репозитории")
                 
             st.success("💡 Используйте эти файлы как образцы для вашей работы!")
             
@@ -238,10 +226,10 @@ def main():
         - `Оценка 5 баллов Дисциплина 1/2/3`
         - Оценки: `Удовлетворительно`, `Хорошо`, `Отлично`
         
-        **📄 Word файл должен содержать:**
-        - Таблицу с критериями оценок
-        - Колонки: Дисциплина, Удовлетворительно, Хорошо, Отлично
-        - Текстовые описания критериев для каждой оценки
+        **📄 Excel файл навыков должен содержать:**
+        - Колонки: Дисциплина, Уровень_оценки, Описание_навыков
+        - Уровни оценки: Удовлетворительно, Хорошо, Отлично
+        - Текстовые описания навыков для каждой оценки
         
         💡 **Скачайте примеры выше для понимания формата!**
         """)
@@ -258,21 +246,21 @@ def main():
         )
     
     with col2:
-        st.subheader("📄 Загрузка справочника критериев")
-        word_file = st.file_uploader(
-            "Выберите Word файл со справочником",
-            type=['docx'],
-            help="Файл должен содержать таблицу с критериями для каждой оценки"
+        st.subheader("📄 Загрузка справочника навыков")
+        skills_file = st.file_uploader(
+            "Выберите Excel файл с агрегированными навыками",
+            type=['xlsx', 'xls'],
+            help="Файл должен содержать агрегированные навыки с колонками: Дисциплина, Уровень_оценки, Описание_навыков"
         )
     
     # Обработка файлов
-    if excel_file and word_file:
+    if excel_file and skills_file:
         try:
             # Загружаем данные
             with st.spinner("📥 Загружаем файлы..."):
                 df = pd.read_excel(excel_file)
-                word_content = word_file.read()
-                grade_mapping = load_reference_data(word_content)
+                skills_content = skills_file.read()
+                grade_mapping = load_reference_data(skills_content)
             
             st.success("✅ Файлы успешно загружены!")
             
@@ -291,7 +279,7 @@ def main():
             with st.expander("👀 Просмотр данных Excel"):
                 st.dataframe(df.head())
             
-            with st.expander("📋 Справочник критериев"):
+            with st.expander("📋 Справочник навыков"):
                 ref_df = pd.DataFrame.from_dict(grade_mapping, orient='index')
                 st.dataframe(ref_df)
             
@@ -338,8 +326,8 @@ def main():
             st.exception(e)
     
     elif excel_file:
-        st.info("📄 Загрузите также Word файл со справочником для продолжения")
-    elif word_file:
+        st.info("📄 Загрузите также Excel файл с агрегированными навыками для продолжения")
+    elif skills_file:
         st.info("📊 Загрузите также Excel файл с данными студентов для продолжения")
     else:
         st.info("📁 Загрузите оба файла для начала обработки")
