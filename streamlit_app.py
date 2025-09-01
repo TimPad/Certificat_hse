@@ -72,9 +72,9 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     
     for index, row in df.iterrows():
         student_results = []
-        student_name = row.iloc[0] if len(row) > 0 else f"Студент {index + 1}"
+        student_email = row['Почта'] if 'Почта' in df.columns else f"Студент {index + 1}"
         
-        processing_log.append(f"\n👤 Обрабатываем студента: {student_name}")
+        processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
         
         # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
@@ -123,13 +123,8 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 if target_discipline and target_discipline in grade_mapping:
                     if grade_key in grade_mapping[target_discipline]:
                         result_text = grade_mapping[target_discipline][grade_key]
-                        # Получаем короткое название для отображения
-                        short_name_col = f"Название Дисциплины {discipline_num}"
-                        if short_name_col in df.columns:
-                            short_name = str(row[short_name_col]).strip()
-                            formatted_discipline = short_name.capitalize()
-                        else:
-                            formatted_discipline = full_discipline
+                        # Используем полное название дисциплины, так как колонок "Название Дисциплины" больше нет
+                        formatted_discipline = full_discipline
                         
                         formatted_result = f"{formatted_discipline}:\n{result_text}"
                         student_results.append(formatted_result)
@@ -147,13 +142,17 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
         final_result = "\n\n".join(student_results) if student_results else ""
         results.append(final_result)
         
-        processing_log.append(f"  🎯 Итоговый результат для {student_name}: '{final_result}'")
+        processing_log.append(f"  🎯 Итоговый результат для {student_email}: '{final_result}'")
     
     processing_log.append(f"\n📊 Обработано {len(df)} студентов")
     
     # Добавляем результаты в DataFrame
     df_result = df.copy()
     df_result['Итоговый результат'] = results
+    
+    # Удаляем колонки, начинающиеся с "Название Дисциплины "
+    columns_to_drop = [col for col in df_result.columns if col.startswith('Название Дисциплины ')]
+    df_result = df_result.drop(columns=columns_to_drop)
     
     return df_result, processing_log
 
@@ -221,8 +220,8 @@ def main():
         st.header("📋 Требования к файлам")
         st.markdown("""
         **📊 Excel файл должен содержать:**
-        - Колонки `Учащийся`
-        - `Название Дисциплины 1/2/3` или `Дисциплина 1/2/3`
+        - Колонку `Почта`
+        - `Дисциплина 1/2/3`
         - `Оценка 5 баллов Дисциплина 1/2/3`
         - Оценки: `Удовлетворительно`, `Хорошо`, `Отлично`
         
