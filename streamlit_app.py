@@ -67,19 +67,24 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     
     processing_log.append(f"📊 Начинаем обработку {len(df)} студентов...")
     processing_log.append(f"🗂️ Найдено дисциплин в справочнике: {len(grade_mapping)}")
-    processing_log.append(f"📋 Дисциплины в справочнике: {list(grade_mapping.keys())}")
-    processing_log.append(f"📁 Колонки в Excel файле: {list(df.columns)}")
+    
+    # Проверяем наличие обязательных колонок
+    required_columns = ['Почта']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        processing_log.append(f"⚠️ Отсутствуют обязательные колонки: {missing_columns}")
     
     for index, row in df.iterrows():
         student_results = []
-        student_email = row['Почта'] if 'Почта' in df.columns else f"Студент {index + 1}"
+        student_email = row.get('Почта', f"Студент {index + 1}")
         
         processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
         
         # Множество для отслеживания уже обработанных пар (дисциплина, оценка)
         processed_disciplines = set()
         
-        # Словарь для хранения оценок по дисциплинам (для проверки конфликтов)
+        # Словарь для хранения оценок по дисциплинам
         discipline_grades = {}
         
         # Обрабатываем каждую из трех дисциплин
@@ -93,11 +98,11 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                     processing_log.append(f"    ⚠️ Пропускаем дисциплину {discipline_num}: колонки не найдены")
                     continue
                 
-                full_discipline = str(row[discipline_col]).strip()
+                full_discipline = str(row[discipline_col]).strip() if pd.notna(row[discipline_col]) else ""
                 grade_value = row[grade_5_col]
                 
                 # Пропускаем пустые значения
-                if pd.isna(full_discipline) or pd.isna(grade_value) or not full_discipline:
+                if not full_discipline or pd.isna(grade_value):
                     processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
                     continue
                 
@@ -139,15 +144,15 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 result_text = grade_mapping[full_discipline][grade_key]
                 formatted_result = f"{full_discipline}:\n{result_text}"
                 student_results.append(formatted_result)
-                processed_disciplines.add(discipline_grade_pair)  # Отмечаем как обработанную
-                discipline_grades[full_discipline] = grade_key  # Обновляем оценку для дисциплины
+                processed_disciplines.add(discipline_grade_pair)
+                discipline_grades[full_discipline] = grade_key
                 
                 processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}'")
                 
             except Exception as e:
                 processing_log.append(f"    ❌ Ошибка при обработке дисциплины {discipline_num}: {str(e)}")
         
-        # Формируем итоговый результат (разделение двойным переносом)
+        # Формируем итоговый результат
         final_result = "\n\n".join(student_results) if student_results else ""
         results.append(final_result)
         
@@ -162,7 +167,7 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     df_result = df.copy()
     df_result['Итоговый результат'] = results
     
-    # Удаляем старые колонки с названиями дисциплин (если остались)
+    # Удаляем старые колонки с названиями дисциплин
     columns_to_drop = [col for col in df_result.columns if col.startswith('Название Дисциплины ')]
     if columns_to_drop:
         df_result = df_result.drop(columns=columns_to_drop)
