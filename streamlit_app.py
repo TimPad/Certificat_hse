@@ -75,7 +75,7 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
         processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
         
         # Словарь для хранения уникальных дисциплин с их оценками
-        discipline_results = {}  # {дисциплина: (оценка, описание)}
+        discipline_results = {}  # {дисциплина: (оценка, описание, отображаемое_имя)}
         
         # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
@@ -105,7 +105,14 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 
                 grade_key = grade_column_mapping[clean_grade]
                 
-                # Проверяем наличие дисциплины в справочнике
+                # Получаем отображаемое имя дисциплины из колонки Название Дисциплины
+                display_name_col = f"Название Дисциплины {discipline_num}"
+                if display_name_col in df.columns and pd.notna(row[display_name_col]):
+                    display_name = str(row[display_name_col]).strip()
+                else:
+                    display_name = full_discipline
+                
+                # Проверяем наличие дисциплины в справочнике (по точному названию из колонки Дисциплина)
                 if full_discipline not in grade_mapping:
                     processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
                     continue
@@ -121,23 +128,23 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                     # Приоритет для более высокой оценки
                     if int(grade_key) > int(existing_grade):
                         result_text = grade_mapping[full_discipline][grade_key]
-                        discipline_results[full_discipline] = (grade_key, result_text)
+                        discipline_results[full_discipline] = (grade_key, result_text, display_name)
                         processing_log.append(f"    🔼 Обновляем на более высокую оценку '{clean_grade}'")
                     else:
                         processing_log.append(f"    ⏭️ Сохраняем существующую оценку")
                 else:
                     # Добавляем новую дисциплину
                     result_text = grade_mapping[full_discipline][grade_key]
-                    discipline_results[full_discipline] = (grade_key, result_text)
-                    processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}'")
+                    discipline_results[full_discipline] = (grade_key, result_text, display_name)
+                    processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}' (отображается как '{display_name}')")
                 
             except Exception as e:
                 processing_log.append(f"    ❌ Ошибка при обработке дисциплины {discipline_num}: {str(e)}")
         
         # Формируем итоговый результат из уникальных дисциплин
         student_results = []
-        for discipline, (grade, description) in discipline_results.items():
-            formatted_result = f"{discipline}:\n{description}"
+        for discipline, (grade, description, display_name) in discipline_results.items():
+            formatted_result = f"{display_name}:\n{description}"
             student_results.append(formatted_result)
         
         # Формируем итоговый результат (разделение двойным переносом)
