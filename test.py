@@ -27,23 +27,23 @@ def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
         skills_df = pd.read_excel(tmp_file_path)
         
         # Создаем словарь маппинга: {дисциплина: {уровень_оценки: описание_навыков}}
-        # Используем текстовые уровни напрямую ('Удовлетворительно', 'Хорошо', 'Отлично')
         grade_mapping = {}
         
         for _, row in skills_df.iterrows():
-            discipline = str(row['Дисциплина']).strip() if 'Дисциплина' in skills_df.columns else ''
-            level = str(row['Уровень_оценки']).strip() if 'Уровень_оценки' in skills_df.columns else ''
-            description = str(row['Описание_навыков']).strip() if 'Описание_навыков' in skills_df.columns else ''
-            
-            # Пропускаем пустые строки
-            if not discipline or not level or not description:
-                continue
+            if 'Дисциплина' in skills_df.columns and 'Уровень_оценки' in skills_df.columns and 'Описание_навыков' in skills_df.columns:
+                discipline = str(row['Дисциплина']).strip() if pd.notna(row['Дисциплина']) else ''
+                level = str(row['Уровень_оценки']).strip() if pd.notna(row['Уровень_оценки']) else ''
+                description = str(row['Описание_навыков']).strip() if pd.notna(row['Описание_навыков']) else ''
                 
-            if discipline not in grade_mapping:
-                grade_mapping[discipline] = {}
-            
-            if level in ['Удовлетворительно', 'Хорошо', 'Отлично']:
-                grade_mapping[discipline][level] = description
+                # Пропускаем пустые строки
+                if not discipline or not level or not description:
+                    continue
+                    
+                if discipline not in grade_mapping:
+                    grade_mapping[discipline] = {}
+                
+                if level in ['Удовлетворительно', 'Хорошо', 'Отлично']:
+                    grade_mapping[discipline][level] = description
         
         return grade_mapping
     finally:
@@ -59,29 +59,41 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     results = []
     processing_log = []
     
+    # Ограничиваем размер лога для избежания ошибок WebSocket
+    max_log_entries = 1000
+    
     processing_log.append(f"📊 Начинаем обработку {len(df)} студентов...")
     processing_log.append(f"🗂️ Найдено дисциплин в справочнике: {len(grade_mapping)}")
-    processing_log.append(f"📋 Дисциплины в справочнике: {list(grade_mapping.keys())}")
     processing_log.append(f"📁 Колонки в Excel файле: {list(df.columns)}")
     
+    log_count = len(processing_log)
+    
     for index, row in df.iterrows():
-        student_results = []  # List для навыков с оформлением
-        student_email = str(row['Почта']).strip() if 'Почта' in df.columns and pd.notna(row['Почта']) else f"Студент {index + 1}"
+        # Проверяем лимит лога
+        if log_count >= max_log_entries:
+            processing_log.append("⚠️ Лог обрезан для предотвращения ошибок (слишком много записей)")
+            break
+            
+        student_results = []
+        student_email = str(row['Почта']).strip() if 'Почта' in df.columns and pd.notna(row['Почта']) and str(row['Почта']).strip() else f"Студент {index + 1}"
         
-        processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
+        processing_log.append(f"👤 Студент {index + 1}: {student_email}")
+        log_count += 1
         
         # Множество для отслеживания уже обработанных пар (дисциплина, оценка)
         processed_pairs = set()
         
         # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
+            if log_count >= max_log_entries:
+                break
+                
             try:
                 discipline_col = f"Дисциплина {discipline_num}"
                 grade_5_col = f"Оценка 5 баллов Дисциплина {discipline_num}"
                 
                 # Проверяем наличие колонок
                 if discipline_col not in df.columns or grade_5_col not in df.columns:
-                    processing_log.append(f"    ⚠️ Пропускаем дисциплину {discipline_num}: колонки не найдены")
                     continue
                 
                 full_discipline = str(row[discipline_col]).strip() if pd.notna(row[discipline_col]) else ""
@@ -89,7 +101,6 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 
                 # Пропускаем пустые значения
                 if not full_discipline or pd.isna(grade_value):
-                    processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
                     continue
                 
                 clean_grade = str(grade_value).strip()
@@ -97,7 +108,6 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 # Проверяем, известна ли оценка
                 valid_grades = ['Удовлетворительно', 'Хорошо', 'Отлично']
                 if clean_grade not in valid_grades:
-                    processing_log.append(f"    ❌ Неизвестная оценка: '{clean_grade}' (ожидалось: {', '.join(valid_grades)})")
                     continue
                 
                 # Ключ: (дисциплина, оценка)
@@ -105,39 +115,29 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 
                 # Проверяем, была ли эта комбинация уже обработана
                 if discipline_grade_pair in processed_pairs:
-                    processing_log.append(f"    ⚠️ Пропускаем дублированную комбинацию: '{full_discipline}' с оценкой '{clean_grade}'")
                     continue
                 
                 # Проверяем наличие в справочнике
                 if full_discipline not in grade_mapping:
-                    processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
                     continue
                 
                 if clean_grade not in grade_mapping[full_discipline]:
-                    processing_log.append(f"    ⚠️ Нет описания навыков для оценки '{clean_grade}' по дисциплине '{full_discлина}'")
                     continue
                 
                 # Добавляем форматированный навык в список
                 result_text = grade_mapping[full_discipline][clean_grade]
-                formatted_result = f"- {full_discipline} ({clean_grade}): {result_text}"
+                formatted_result = f"- {full_discipline} ({clean_grade})"
                 student_results.append(formatted_result)
-                processed_pairs.add(discipline_grade_pair)  # Отмечаем как обработанную
+                processed_pairs.add(discipline_grade_pair)
                 
-                processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}'")
-                
-            except Exception as e:
-                processing_log.append(f"    ❌ Ошибка при обработке дисциплины {discipline_num}: {str(e)}")
+            except Exception:
+                continue
         
-        # Формируем итоговый результат (список с переносами строк)
+        # Формируем итоговый результат
         final_result = "\n".join(student_results) if student_results else ""
         results.append(final_result)
-        
-        if final_result:
-            processing_log.append(f"  🎯 Итоговый результат:\n{final_result}")
-        else:
-            processing_log.append(f"  🎯 Итоговый результат: пусто")
     
-    processing_log.append(f"\n✅ Обработка завершена: обработано {len(df)} студентов")
+    processing_log.append(f"✅ Обработка завершена: обработано {len(df)} студентов")
     
     # Создаём результирующий DataFrame
     df_result = df.copy()
@@ -147,7 +147,6 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     columns_to_drop = [col for col in df_result.columns if col.startswith('Название Дисциплины ')]
     if columns_to_drop:
         df_result = df_result.drop(columns=columns_to_drop)
-        processing_log.append(f"🧹 Удалены колонки: {columns_to_drop}")
     
     return df_result, processing_log
 
@@ -165,53 +164,6 @@ def main():
         - Генерирует текст для сертификатов
         """)
         
-        # Кнопка скачивания примера файла
-        st.header("📥 Скачать примеры")
-        
-        # Загружаем пример Excel файла для скачивания
-        try:
-            # Используем путь относительно текущего файла
-            current_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-            
-            # Excel пример
-            excel_example_path = os.path.join(current_dir, 'Сертификаты пример.xlsx')
-            
-            if os.path.exists(excel_example_path):
-                with open(excel_example_path, 'rb') as example_file:
-                    excel_example_data = example_file.read()
-                
-                st.download_button(
-                    label="📊 Скачать пример Excel файла",
-                    data=excel_example_data,
-                    file_name="Сертификаты пример.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Скачайте этот файл как шаблон для ваших данных студентов"
-                )
-            else:
-                st.warning("⚠️ Пример Excel файла не найден в репозитории")
-            
-            # Excel справочник агрегированных навыков
-            skills_example_path = os.path.join(current_dir, 'агрегированные_навыки.xlsx')
-            
-            if os.path.exists(skills_example_path):
-                with open(skills_example_path, 'rb') as skills_file:
-                    skills_data = skills_file.read()
-                
-                st.download_button(
-                    label="📄 Скачать справочник навыков",
-                    data=skills_data,
-                    file_name="агрегированные_навыки.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Скачайте этот файл как пример справочника с агрегированными навыками"
-                )
-            else:
-                st.warning("⚠️ Справочник навыков не найден в репозитории")
-                
-            st.success("💡 Используйте эти файлы как образцы для вашей работы!")
-            
-        except Exception as e:
-            st.error(f"❌ Ошибка при загрузке примеров файлов: {str(e)}")
-        
         st.header("📋 Требования к файлам")
         st.markdown("""
         **📊 Excel файл должен содержать:**
@@ -223,9 +175,6 @@ def main():
         **📄 Excel файл навыков должен содержать:**
         - Колонки: Дисциплина, Уровень_оценки, Описание_навыков
         - Уровни оценки: Удовлетворительно, Хорошо, Отлично
-        - Текстовые описания навыков для каждой оценки
-        
-        💡 **Скачайте примеры выше для понимания формата!**
         """)
     
     # Основной интерфейс
@@ -255,7 +204,7 @@ def main():
             # Загружаем данные
             with st.spinner("📥 Загружаем файлы..."):
                 df = pd.read_excel(excel_file)
-                skills_content = skills_file.getvalue()  # Используем getvalue() вместо read()
+                skills_content = skills_file.getvalue()
                 grade_mapping = load_reference_data(skills_content)
             
             st.success("✅ Файлы успешно загружены!")
@@ -283,7 +232,7 @@ def main():
                         ref_data.append({
                             'Дисциплина': discipline,
                             'Уровень': level,
-                            'Описание': description
+                            'Описание': description[:100] + "..." if len(description) > 100 else description
                         })
                 ref_df = pd.DataFrame(ref_data)
                 st.dataframe(ref_df)
@@ -305,9 +254,14 @@ def main():
                     st.dataframe(result_df, use_container_width=True)
                 
                 with tab2:
+                    # Ограничиваем размер отображаемого лога
+                    log_text = "\n".join(processing_log[-500:])  # Показываем последние 500 записей
+                    if len(processing_log) > 500:
+                        log_text = f"⚠️ Показаны последние 500 записей из {len(processing_log)}\n\n" + log_text
+                    
                     st.text_area(
                         "Детальный лог обработки:",
-                        value="\n".join(processing_log),
+                        value=log_text,
                         height=300
                     )
                 
@@ -316,7 +270,7 @@ def main():
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         result_df.to_excel(writer, index=False, sheet_name='Результаты')
-                    output.seek(0)  # Важно: перемещаем указатель в начало
+                    output.seek(0)
                     
                     st.download_button(
                         label="📥 Скачать результаты Excel",
@@ -329,7 +283,6 @@ def main():
         
         except Exception as e:
             st.error(f"❌ Ошибка при обработке файлов: {str(e)}")
-            st.exception(e)
     
     elif excel_file:
         st.info("📄 Загрузите также Excel файл с агрегированными навыками для продолжения")
@@ -337,18 +290,6 @@ def main():
         st.info("📊 Загрузите также Excel файл с данными студентов для продолжения")
     else:
         st.info("📁 Загрузите оба файла для начала обработки")
-    
-    # Футер
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style='text-align: center; color: #666;'>
-            <p>Система Обработки Сертификатов v1.0.0 | 
-            Создано с помощью Streamlit 🚀</p>
-        </div>
-        """, 
-        unsafe_allow_html=True
-    )
 
 if __name__ == "__main__":
     main()
