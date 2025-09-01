@@ -31,10 +31,14 @@ def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
         grade_mapping = {}
         
         for _, row in skills_df.iterrows():
-            discipline = row['Дисциплина']
-            level = row['Уровень_оценки']
-            description = row['Описание_навыков']
+            discipline = str(row['Дисциплина']).strip() if 'Дисциплина' in skills_df.columns else ''
+            level = str(row['Уровень_оценки']).strip() if 'Уровень_оценки' in skills_df.columns else ''
+            description = str(row['Описание_навыков']).strip() if 'Описание_навыков' in skills_df.columns else ''
             
+            # Пропускаем пустые строки
+            if not discipline or not level or not description:
+                continue
+                
             if discipline not in grade_mapping:
                 grade_mapping[discipline] = {}
             
@@ -44,7 +48,10 @@ def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
         return grade_mapping
     finally:
         # Удаляем временный файл
-        os.unlink(tmp_file_path)
+        try:
+            os.unlink(tmp_file_path)
+        except:
+            pass
 
 def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, str]]) -> Tuple[pd.DataFrame, list]:
     """Обрабатывает данные студентов и возвращает результаты с новой логикой"""
@@ -59,7 +66,7 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
     
     for index, row in df.iterrows():
         student_results = []  # List для навыков с оформлением
-        student_email = row['Почта'] if 'Почта' in df.columns else f"Студент {index + 1}"
+        student_email = str(row['Почта']).strip() if 'Почта' in df.columns and pd.notna(row['Почта']) else f"Студент {index + 1}"
         
         processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
         
@@ -77,11 +84,11 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                     processing_log.append(f"    ⚠️ Пропускаем дисциплину {discipline_num}: колонки не найдены")
                     continue
                 
-                full_discipline = str(row[discipline_col]).strip()
+                full_discipline = str(row[discipline_col]).strip() if pd.notna(row[discipline_col]) else ""
                 grade_value = row[grade_5_col]
                 
                 # Пропускаем пустые значения
-                if pd.isna(full_discipline) or pd.isna(grade_value) or not full_discipline:
+                if not full_discipline or pd.isna(grade_value):
                     processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
                     continue
                 
@@ -107,7 +114,7 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                     continue
                 
                 if clean_grade not in grade_mapping[full_discipline]:
-                    processing_log.append(f"    ⚠️ Нет описания навыков для оценки '{clean_grade}' по дисциплине '{full_discipline}'")
+                    processing_log.append(f"    ⚠️ Нет описания навыков для оценки '{clean_grade}' по дисциплине '{full_discлина}'")
                     continue
                 
                 # Добавляем форматированный навык в список
@@ -164,7 +171,7 @@ def main():
         # Загружаем пример Excel файла для скачивания
         try:
             # Используем путь относительно текущего файла
-            current_dir = os.path.dirname(os.path.abspath(__file__))
+            current_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
             
             # Excel пример
             excel_example_path = os.path.join(current_dir, 'Сертификаты пример.xlsx')
@@ -229,7 +236,8 @@ def main():
         excel_file = st.file_uploader(
             "Выберите Excel файл с данными студентов",
             type=['xlsx', 'xls'],
-            help="Файл должен содержать данные о студентах и их оценках"
+            help="Файл должен содержать данные о студентах и их оценках",
+            key="excel_file"
         )
     
     with col2:
@@ -237,7 +245,8 @@ def main():
         skills_file = st.file_uploader(
             "Выберите Excel файл с агрегированными навыками",
             type=['xlsx', 'xls'],
-            help="Файл должен содержать агрегированные навыки с колонками: Дисциплина, Уровень_оценки, Описание_навыков"
+            help="Файл должен содержать агрегированные навыки с колонками: Дисциплина, Уровень_оценки, Описание_навыков",
+            key="skills_file"
         )
     
     # Обработка файлов
@@ -246,7 +255,7 @@ def main():
             # Загружаем данные
             with st.spinner("📥 Загружаем файлы..."):
                 df = pd.read_excel(excel_file)
-                skills_content = skills_file.read()
+                skills_content = skills_file.getvalue()  # Используем getvalue() вместо read()
                 grade_mapping = load_reference_data(skills_content)
             
             st.success("✅ Файлы успешно загружены!")
@@ -267,7 +276,16 @@ def main():
                 st.dataframe(df.head())
             
             with st.expander("📋 Справочник навыков"):
-                ref_df = pd.DataFrame.from_dict(grade_mapping, orient='index')
+                # Преобразуем словарь в DataFrame для отображения
+                ref_data = []
+                for discipline, levels in grade_mapping.items():
+                    for level, description in levels.items():
+                        ref_data.append({
+                            'Дисциплина': discipline,
+                            'Уровень': level,
+                            'Описание': description
+                        })
+                ref_df = pd.DataFrame(ref_data)
                 st.dataframe(ref_df)
             
             # Кнопка обработки
@@ -284,7 +302,7 @@ def main():
                 tab1, tab2, tab3 = st.tabs(["📄 Результаты", "📋 Лог обработки", "💾 Скачать"])
                 
                 with tab1:
-                    st.dataframe(result_df, width="stretch")
+                    st.dataframe(result_df, use_container_width=True)
                 
                 with tab2:
                     st.text_area(
@@ -297,7 +315,8 @@ def main():
                     # Подготовка файла для скачивания
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        result_df.to_excel(writer, index=False)
+                        result_df.to_excel(writer, index=False, sheet_name='Результаты')
+                    output.seek(0)  # Важно: перемещаем указатель в начало
                     
                     st.download_button(
                         label="📥 Скачать результаты Excel",
