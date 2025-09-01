@@ -51,6 +51,7 @@ def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
     finally:
         # Удаляем временный файл
         os.unlink(tmp_file_path)
+
 def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, str]]) -> Tuple[pd.DataFrame, list]:
     """Обрабатывает данные студентов и возвращает результаты"""
     
@@ -97,7 +98,6 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 
                 # Пропускаем пустые значения
                 if pd.isna(full_discipline) or pd.isna(grade_value) or not full_discipline:
-                    processing Lewis
                     processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
                     continue
                 
@@ -169,6 +169,7 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
         processing_log.append(f"🧹 Удалены колонки: {columns_to_drop}")
     
     return df_result, processing_log
+
 
 def main():
     st.title("📜 Система Обработки Сертификатов")
