@@ -76,83 +76,82 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
         
         processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
         
+        # Множество для отслеживания уже обработанных дисциплин (во избежание дублирования)
+        processed_disciplines = set()
+        
         # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
             try:
-                # Используем колонки с полными названиями дисциплин для точного соответствия
                 discipline_col = f"Дисциплина {discipline_num}"
                 grade_5_col = f"Оценка 5 баллов Дисциплина {discipline_num}"
                 
-                # Получаем название дисциплины и оценку
-                if discipline_col in df.columns and grade_5_col in df.columns:
-                    full_discipline = str(row[discipline_col]).strip()
-                    grade_value = row[grade_5_col]
-                else:
-                    processing_log.append(f"    ⚠️ Необходимые колонки не найдены: '{discipline_col}' или '{grade_5_col}'")
+                # Проверяем наличие колонок
+                if discipline_col not in df.columns or grade_5_col not in df.columns:
+                    processing_log.append(f"    ⚠️ Пропускаем дисциплину {discipline_num}: колонки не найдены")
                     continue
                 
-                processing_log.append(f"  📚 Дисциплина {discipline_num}: '{full_discipline}', Оценка: {grade_value}")
+                full_discipline = str(row[discipline_col]).strip()
+                grade_value = row[grade_5_col]
                 
-                # Пропускаем, если дисциплина или оценка отсутствуют
-                if pd.isna(full_discipline) or pd.isna(grade_value):
-                    processing_log.append(f"    ⏭️ Пропускаем: отсутствует название дисциплины или оценка")
+                # Пропускаем пустые значения
+                if pd.isna(full_discipline) or pd.isna(grade_value) or not full_discipline:
+                    processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
                     continue
                 
-                # Очищаем текст оценки
                 clean_grade = str(grade_value).strip()
                 
-                processing_log.append(f"    🔍 Ищем соответствие для: '{full_discipline}' с оценкой '{clean_grade}'")
-                
-                # Прямое соответствие текста оценки колонкам
+                # Проверяем, известна ли оценка
                 if clean_grade not in grade_column_mapping:
                     processing_log.append(f"    ❌ Неизвестная оценка: '{clean_grade}' (ожидалось: Удовлетворительно/Хорошо/Отлично)")
                     continue
-                    
+                
                 grade_key = grade_column_mapping[clean_grade]
-                processing_log.append(f"    🔄 Оценка '{clean_grade}' соответствует колонке {grade_key}")
                 
-                # Точное соответствие названия дисциплины в справочнике
-                target_discipline = None
-                if full_discipline in grade_mapping:
-                    target_discipline = full_discipline
-                    processing_log.append(f"    ✅ Найдено точное соответствие: '{full_discipline}'")
-                else:
-                    processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
-                    processing_log.append(f"    📋 Первые 3 доступные дисциплины: {list(grade_mapping.keys())[:3]}...")
+                # Проверяем, не была ли дисциплина уже обработана
+                if full_discipline in processed_disciplines:
+                    processing_log.append(f"    ⚠️ Пропускаем дублированную дисциплину: '{full_discipline}'")
+                    continue
                 
-                if target_discipline and target_discipline in grade_mapping:
-                    if grade_key in grade_mapping[target_discipline]:
-                        result_text = grade_mapping[target_discipline][grade_key]
-                        # Используем полное название дисциплины, так как колонок "Название Дисциплины" больше нет
-                        formatted_discipline = full_discipline
-                        
-                        formatted_result = f"{formatted_discipline}:\n{result_text}"
-                        student_results.append(formatted_result)
-                        processing_log.append(f"    ✅ Найдено точное соответствие: '{formatted_discipline}' → текст результата")
-                    else:
-                        processing_log.append(f"    ⚠️ Дисциплина найдена, но нет текста для оценки {clean_grade}")
-                else:
+                # Проверяем наличие дисциплины в справочнике
+                if full_discipline not in grade_mapping:
                     processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
-                    processing_log.append(f"    📋 Первые 3 доступные дисциплины: {list(grade_mapping.keys())[:3]}...")
-                    
+                    continue
+                
+                if grade_key not in grade_mapping[full_discipline]:
+                    processing_log.append(f"    ⚠️ Нет описания навыков для оценки '{clean_grade}' по дисциплине '{full_discipline}'")
+                    continue
+                
+                # Добавляем результат
+                result_text = grade_mapping[full_discipline][grade_key]
+                formatted_result = f"{full_discipline}:\n{result_text}"
+                student_results.append(formatted_result)
+                processed_disciplines.add(full_discipline)  # Отмечаем как обработанную
+                
+                processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}'")
+                
             except Exception as e:
                 processing_log.append(f"    ❌ Ошибка при обработке дисциплины {discipline_num}: {str(e)}")
         
-        # Формируем итоговый результат для студента (разделяем двойным переносом строки между дисциплинами)
+        # Формируем итоговый результат (разделение двойным переносом)
         final_result = "\n\n".join(student_results) if student_results else ""
         results.append(final_result)
         
-        processing_log.append(f"  🎯 Итоговый результат для {student_email}: '{final_result}'")
+        if final_result:
+            processing_log.append(f"  🎯 Итоговый результат:\n{final_result}")
+        else:
+            processing_log.append(f"  🎯 Итоговый результат: пусто")
     
-    processing_log.append(f"\n📊 Обработано {len(df)} студентов")
+    processing_log.append(f"\n✅ Обработка завершена: обработано {len(df)} студентов")
     
-    # Добавляем результаты в DataFrame
+    # Создаём результирующий DataFrame
     df_result = df.copy()
     df_result['Итоговый результат'] = results
     
-    # Удаляем колонки, начинающиеся с "Название Дисциплины "
+    # Удаляем старые колонки с названиями дисциплин (если остались)
     columns_to_drop = [col for col in df_result.columns if col.startswith('Название Дисциплины ')]
-    df_result = df_result.drop(columns=columns_to_drop)
+    if columns_to_drop:
+        df_result = df_result.drop(columns=columns_to_drop)
+        processing_log.append(f"🧹 Удалены колонки: {columns_to_drop}")
     
     return df_result, processing_log
 
