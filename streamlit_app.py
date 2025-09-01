@@ -14,10 +14,27 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+def deduplicate_lines(text):
+    """Удаляет дублирующиеся строки из текста, сохраняя порядок первого появления"""
+    if pd.isna(text) or not isinstance(text, str):
+        return text
+    
+    lines = text.split('\n')
+    seen_lines = set()
+    unique_lines = []
+    
+    for line in lines:
+        line_clean = line.strip()
+        if line_clean and line_clean not in seen_lines:
+            seen_lines.add(line_clean)
+            unique_lines.append(line)
+    
+    return '\n'.join(unique_lines)
+
 # Кэширование для загрузки справочных данных
 @st.cache_data
-def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
-    """Загружает справочные данные из Excel файла с агрегированными навыками"""
+def load_reference_data(skills_content: bytes) -> Dict[str, str]:
+    """Загружает справочные данные из Excel файла с агрегированными навыками используя составные ключи"""
     # Создаем временный файл
     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
         tmp_file.write(skills_content)
@@ -26,147 +43,93 @@ def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
     try:
         skills_df = pd.read_excel(tmp_file_path)
         
-        # Создаем словарь маппинга: {дисциплина: {уровень_оценки: описание_навыков}}
+        # Создаем словарь маппинга с составным ключом: {"дисциплина—уровень_оценки": описание_навыков}
         grade_mapping = {}
+        cleaned_count = 0
         
         for _, row in skills_df.iterrows():
             discipline = row['Дисциплина']
             level = row['Уровень_оценки']
             description = row['Описание_навыков']
             
-            if discipline not in grade_mapping:
-                grade_mapping[discipline] = {}
+            # Удаляем дублирующиеся строки из описания навыков
+            original_description = description
+            clean_description = deduplicate_lines(description)
             
-            # Маппим уровни оценки на ключи для совместимости
-            level_key_mapping = {
-                'Удовлетворительно': '3',
-                'Хорошо': '4',
-                'Отлично': '5'
-            }
+            if original_description != clean_description:
+                cleaned_count += 1
             
-            if level in level_key_mapping:
-                grade_mapping[discipline][level_key_mapping[level]] = description
+            # Создаем составной ключ "дисциплина—уровень_оценки"
+            composite_key = f"{discipline}—{level}"
+            grade_mapping[composite_key] = clean_description
+        
+        # Логируем информацию об очистке (для отладки) - убрано для уменьшения логирования
+        # if cleaned_count > 0:
+        #     st.info(f"🧹 Очищено {cleaned_count} описаний от дубликатов")
         
         return grade_mapping
     finally:
         # Удаляем временный файл
         os.unlink(tmp_file_path)
 
-def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, str]]) -> Tuple[pd.DataFrame, list]:
-    """Обрабатывает данные студентов и возвращает результаты"""
-    
-    # Словарь сопоставления оценок
-    grade_column_mapping = {
-        'Удовлетворительно': '3',
-        'Хорошо': '4',
-        'Отлично': '5'
-    }
+def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, str]) -> Tuple[pd.DataFrame, list]:
+    """Обрабатывает данные студентов используя составные ключи"""
     
     results = []
     processing_log = []
     
-    processing_log.append(f"📊 Начинаем обработку {len(df)} студентов...")
-    processing_log.append(f"🗂️ Найдено дисциплин в справочнике: {len(grade_mapping)}")
+    # Упрощенное логирование
+    processing_log.append(f"📊 Обрабатываем {len(df)} студентов")
     
     for index, row in df.iterrows():
         student_results = []
-        student_email = row.get('Почта', f"Студент {index + 1}")
+        processed_keys = set()
         
-        processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
-        
-        # Словарь для хранения уникальных дисциплин с их оценками
-        discipline_results = {}  # {дисциплина: (оценка, описание, отображаемое_имя)}
-        
-        # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
-            try:
-                discipline_col = f"Дисциплина {discipline_num}"
-                grade_5_col = f"Оценка 5 баллов Дисциплина {discipline_num}"
+            discipline_col = f"Дисциплина {discipline_num}"
+            grade_5_col = f"Оценка 5 баллов Дисциплина {discipline_num}"
+            
+            if discipline_col not in df.columns or grade_5_col not in df.columns:
+                continue
                 
-                # Проверяем наличие колонок
-                if discipline_col not in df.columns or grade_5_col not in df.columns:
-                    processing_log.append(f"    ⚠️ Пропускаем дисциплину {discipline_num}: колонки не найдены")
-                    continue
+            discipline_value = str(row[discipline_col]).strip()
+            grade_value = str(row[grade_5_col]).strip()
+            
+            if pd.isna(discipline_value) or pd.isna(grade_value) or discipline_value == 'nan' or grade_value == 'nan':
+                continue
+            
+            lookup_key = f"{discipline_value}—{grade_value}"
+            
+            if lookup_key in processed_keys:
+                continue
+            
+            if lookup_key in grade_mapping:
+                skill_description = grade_mapping[lookup_key]
                 
-                full_discipline = str(row[discipline_col]).strip() if pd.notna(row[discipline_col]) else ""
-                grade_value = row[grade_5_col]
-                
-                # Пропускаем пустые значения
-                if not full_discipline or pd.isna(grade_value):
-                    processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
-                    continue
-                
-                clean_grade = str(grade_value).strip()
-                
-                # Проверяем, известна ли оценка
-                if clean_grade not in grade_column_mapping:
-                    processing_log.append(f"    ❌ Неизвестная оценка: '{clean_grade}' (ожидалось: Удовлетворительно/Хорошо/Отлично)")
-                    continue
-                
-                grade_key = grade_column_mapping[clean_grade]
-                
-                # Получаем отображаемое имя дисциплины из колонки Название Дисциплины
-                display_name_col = f"Название Дисциплины {discipline_num}"
-                if display_name_col in df.columns and pd.notna(row[display_name_col]):
-                    display_name = str(row[display_name_col]).strip()
+                short_name_col = f"Название Дисциплины {discipline_num}"
+                if short_name_col in df.columns:
+                    display_name = str(row[short_name_col]).strip()
+                    formatted_discipline = display_name.capitalize() if display_name != 'nan' and display_name else discipline_value
                 else:
-                    display_name = full_discipline
+                    formatted_discipline = discipline_value
                 
-                # Проверяем наличие дисциплины в справочнике (по точному названию из колонки Дисциплина)
-                if full_discipline not in grade_mapping:
-                    processing_log.append(f"    ❌ Дисциплина '{full_discipline}' не найдена в справочнике")
-                    continue
-                
-                if grade_key not in grade_mapping[full_discipline]:
-                    processing_log.append(f"    ⚠️ Нет описания навыков для оценки '{clean_grade}' по дисциплине '{full_discipline}'")
-                    continue
-                
-                # Проверяем, была ли эта дисциплина уже обработана
-                if full_discipline in discipline_results:
-                    existing_grade = discipline_results[full_discipline][0]
-                    processing_log.append(f"    ⚠️ Дисциплина '{full_discipline}' уже обработана с оценкой '{existing_grade}'")
-                    # Приоритет для более высокой оценки
-                    if int(grade_key) > int(existing_grade):
-                        result_text = grade_mapping[full_discipline][grade_key]
-                        discipline_results[full_discipline] = (grade_key, result_text, display_name)
-                        processing_log.append(f"    🔼 Обновляем на более высокую оценку '{clean_grade}'")
-                    else:
-                        processing_log.append(f"    ⏭️ Сохраняем существующую оценку")
-                else:
-                    # Добавляем новую дисциплину
-                    result_text = grade_mapping[full_discipline][grade_key]
-                    discipline_results[full_discipline] = (grade_key, result_text, display_name)
-                    processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}' (отображается как '{display_name}')")
-                
-            except Exception as e:
-                processing_log.append(f"    ❌ Ошибка при обработке дисциплины {discipline_num}: {str(e)}")
+                formatted_result = f"📚 {formatted_discipline}:\n{skill_description}"
+                student_results.append(formatted_result)
+                processed_keys.add(lookup_key)
         
-        # Формируем итоговый результат из уникальных дисциплин
-        student_results = []
-        for discipline, (grade, description, display_name) in discipline_results.items():
-            formatted_result = f"{display_name}:\n{description}"
-            student_results.append(formatted_result)
-        
-        # Формируем итоговый результат (разделение двойным переносом)
-        final_result = "\n\n".join(student_results) if student_results else ""
+        final_result = "\n\n".join(student_results) if student_results else "Навыки не найдены."
         results.append(final_result)
-        
-        if final_result:
-            processing_log.append(f"  🎯 Итоговый результат:\n{final_result}")
-        else:
-            processing_log.append(f"  🎯 Итоговый результат: пусто")
     
-    processing_log.append(f"\n✅ Обработка завершена: обработано {len(df)} студентов")
+    processing_log.append(f"✅ Успешно обработано")
     
-    # Создаём результирующий DataFrame
     df_result = df.copy()
     df_result['Итоговый результат'] = results
     
-    # Удаляем старые колонки с названиями дисциплин
-    columns_to_drop = [col for col in df_result.columns if col.startswith('Название Дисциплины ')]
-    if columns_to_drop:
-        df_result = df_result.drop(columns=columns_to_drop)
-        processing_log.append(f"🧹 Удалены колонки: {columns_to_drop}")
+    # Удаляем колонки, начинающиеся с "Название Дисциплины "
+    columns_to_remove = [col for col in df_result.columns if col.startswith("Название Дисциплины ")]
+    
+    if columns_to_remove:
+        df_result = df_result.drop(columns=columns_to_remove)
     
     return df_result, processing_log
 
@@ -235,8 +198,8 @@ def main():
         st.header("📋 Требования к файлам")
         st.markdown("""
         **📊 Excel файл должен содержать:**
-        - Колонку `Почта`
-        - `Дисциплина 1/2/3`
+        - Колонки `Учащийся`
+        - `Название Дисциплины 1/2/3` или `Дисциплина 1/2/3`
         - `Оценка 5 баллов Дисциплина 1/2/3`
         - Оценки: `Удовлетворительно`, `Хорошо`, `Отлично`
         
@@ -311,7 +274,7 @@ def main():
                 tab1, tab2, tab3 = st.tabs(["📄 Результаты", "📋 Лог обработки", "💾 Скачать"])
                 
                 with tab1:
-                    st.dataframe(result_df, width="stretch")
+                    st.dataframe(result_df, use_container_width=True)
                 
                 with tab2:
                     st.text_area(
@@ -323,8 +286,9 @@ def main():
                 with tab3:
                     # Подготовка файла для скачивания
                     output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
                         result_df.to_excel(writer, index=False)
+                    output.seek(0)
                     
                     st.download_button(
                         label="📥 Скачать результаты Excel",
