@@ -51,7 +51,6 @@ def load_reference_data(skills_content: bytes) -> Dict[str, Dict[str, str]]:
     finally:
         # Удаляем временный файл
         os.unlink(tmp_file_path)
-
 def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, str]]) -> Tuple[pd.DataFrame, list]:
     """Обрабатывает данные студентов и возвращает результаты"""
     
