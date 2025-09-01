@@ -76,8 +76,11 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
         
         processing_log.append(f"\n👤 Обрабатываем студента: {student_email}")
         
-        # Множество для отслеживания уже обработанных дисциплин (во избежание дублирования)
+        # Множество для отслеживания уже обработанных пар (дисциплина, оценка)
         processed_disciplines = set()
+        
+        # Словарь для хранения оценок по дисциплинам (для проверки конфликтов)
+        discipline_grades = {}
         
         # Обрабатываем каждую из трех дисциплин
         for discipline_num in range(1, 4):
@@ -95,6 +98,7 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 
                 # Пропускаем пустые значения
                 if pd.isna(full_discipline) or pd.isna(grade_value) or not full_discipline:
+                    processing Lewis
                     processing_log.append(f"    ⏭️ Пропускаем: пустая дисциплина или оценка (дисциплина {discipline_num})")
                     continue
                 
@@ -107,9 +111,10 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                 
                 grade_key = grade_column_mapping[clean_grade]
                 
-                # Проверяем, не была ли дисциплина уже обработана
-                if full_discipline in processed_disciplines:
-                    processing_log.append(f"    ⚠️ Пропускаем дублированную дисциплину: '{full_discipline}'")
+                # Проверяем, была ли эта комбинация дисциплины и оценки уже обработана
+                discipline_grade_pair = (full_discipline, grade_key)
+                if discipline_grade_pair in processed_disciplines:
+                    processing_log.append(f"    ⚠️ Пропускаем дублированную комбинацию: '{full_discipline}' с оценкой '{clean_grade}'")
                     continue
                 
                 # Проверяем наличие дисциплины в справочнике
@@ -121,11 +126,22 @@ def process_student_data(df: pd.DataFrame, grade_mapping: Dict[str, Dict[str, st
                     processing_log.append(f"    ⚠️ Нет описания навыков для оценки '{clean_grade}' по дисциплине '{full_discipline}'")
                     continue
                 
+                # Проверяем, не была ли дисциплина уже встречена с другой оценкой
+                if full_discipline in discipline_grades:
+                    existing_grade = discipline_grades[full_discipline]
+                    if existing_grade != grade_key:
+                        processing_log.append(f"    ⚠️ Конфликт оценок для '{full_discipline}': уже есть оценка '{existing_grade}', новая оценка '{clean_grade}'")
+                        # Приоритет для более высокой оценки
+                        if int(grade_key) <= int(existing_grade):
+                            processing_log.append(f"    ⏭️ Пропускаем: новая оценка ниже или равна существующей")
+                            continue
+                
                 # Добавляем результат
                 result_text = grade_mapping[full_discipline][grade_key]
                 formatted_result = f"{full_discipline}:\n{result_text}"
                 student_results.append(formatted_result)
-                processed_disciplines.add(full_discipline)  # Отмечаем как обработанную
+                processed_disciplines.add(discipline_grade_pair)  # Отмечаем как обработанную
+                discipline_grades[full_discipline] = grade_key  # Обновляем оценку для дисциплины
                 
                 processing_log.append(f"    ✅ Добавлено: '{full_discipline}' с оценкой '{clean_grade}'")
                 
